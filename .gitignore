@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.pkl
+*.pt
+*.pth
+!LigandMPNN/model_params/*.pt
+!LigandMPNN/model_params/*.pth
+*.log
+.DS_Store
+.ipynb_checkpoints/
+examples/*/HalluDesign_*/
+outputs/

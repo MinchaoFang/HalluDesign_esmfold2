@@ -1,0 +1,13 @@
+transformers @ git+https://github.com/Biohub/transformers.git@3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf
+esm @ git+https://github.com/Biohub/esm.git@c94ed8d
+filelock
+numpy
+pandas
+biopython
+rdkit
+scipy
+prody
+scikit-learn
+ml-collections
+dm-tree
+torch>=2.2.0
