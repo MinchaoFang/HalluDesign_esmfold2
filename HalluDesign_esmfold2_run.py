@@ -37,6 +37,7 @@ def parse_arguments():
     parser.add_argument("--template_for_eval", type=str, required=False)
     parser.add_argument("--HalluDesign_model", type=str, default="esmfold2", choices=["esmfold2"])
     parser.add_argument("--sm", type=str, nargs="+", required=False, default=[])
+    parser.add_argument("--ccd", type=str, nargs="+", required=False, default=[])
     parser.add_argument("--mpnn", type=str, required=False)
     parser.add_argument("--mpnn_temperature", type=float, default=0.1)
     parser.add_argument("--dna", type=str, nargs="+", required=False, default=[])
@@ -51,7 +52,7 @@ def parse_arguments():
     parser.add_argument("--esmfold2_model_path", type=str, default=DEFAULT_ESMFOLD2_MODEL_PATH)
     parser.add_argument("--esmc_model_path", type=str, default=DEFAULT_ESMC_MODEL_PATH)
     parser.add_argument("--esmfold2_num_loops", type=int, default=3)
-    parser.add_argument("--esmfold2_num_sampling_steps", type=int, default=0)
+    parser.add_argument("--esmfold2_num_sampling_steps", type=int, default=50)
     parser.add_argument(
         "--esmfold2_dtype",
         type=str,
@@ -70,7 +71,7 @@ def build_mpnn_model(args):
 
     mpnn_name = args.mpnn
     if not mpnn_name:
-        mpnn_name = "ligand_mpnn" if (args.sm or args.dna or args.rna) else "protein_mpnn"
+        mpnn_name = "ligand_mpnn" if (args.sm or args.ccd or args.dna or args.rna) else "protein_mpnn"
     args.mpnn = mpnn_name
 
     common_kwargs = dict(
@@ -116,6 +117,8 @@ def main():
         raise FileNotFoundError(f"Template file {args.template_path} not found")
     if args.symmetry_residues and args.symmetry_chains:
         raise ValueError("Cannot specify both --symmetry_residues and --symmetry_chains")
+    if args.sm and args.ccd:
+        raise ValueError("Cannot specify both --sm and --ccd at the same time")
 
     os.makedirs(args.output_dir, exist_ok=True)
     pdb_files = load_pdb_files(args)
@@ -203,6 +206,7 @@ def main():
                     symmetry_chains=args.symmetry_chains,
                     symmetry_segments=args.symmetry_segments,
                     sm=args.sm,
+                    ccd=args.ccd,
                     dna=args.dna,
                     rna=args.rna,
                     cdr=args.cdr,

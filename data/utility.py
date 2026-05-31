@@ -1,4 +1,4 @@
-from Bio.PDB import MMCIFParser, PDBParser, PDBIO, NeighborSearch
+from Bio.PDB import MMCIFParser, PDBParser, PDBIO, NeighborSearch, MMCIFIO
 import numpy as np
 import string
 import json
@@ -16,7 +16,6 @@ from rdkit.Chem import rdMolAlign
 from Bio.PDB import  Superimposer
 import numpy as np
 import os
-from Bio.PDB import  MMCIFIO
 from Bio.PDB import PDBParser, NeighborSearch
 from scipy.stats import pearsonr
 try:
@@ -407,6 +406,19 @@ def save_ligand_residue(residue_atoms, output_file):
     io.set_structure(structure)
     io.save(output_file)
 
+def calculate_ligand_atom_order_rmsd(cif_atoms, pdb_atoms):
+    if len(cif_atoms) != len(pdb_atoms) or not cif_atoms:
+        raise ValueError(
+            f"Ligand atom counts mismatch CIF: {len(cif_atoms)}, PDB: {len(pdb_atoms)}"
+        )
+    cif_coords = np.array([atom.get_coord() for atom in cif_atoms], dtype=np.float32)
+    pdb_coords = np.array([atom.get_coord() for atom in pdb_atoms], dtype=np.float32)
+    diff = cif_coords - pdb_coords
+    rmsd = float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
+    atom_centre_distance = float(np.linalg.norm(cif_coords.mean(axis=0) - pdb_coords.mean(axis=0)))
+    return atom_centre_distance, rmsd
+
+
 def calculate_multi_ligand_rmsd(cif_ligands, pdb_ligands):
     ligand_rmsds = []
     atom_distances = []
@@ -416,12 +428,16 @@ def calculate_multi_ligand_rmsd(cif_ligands, pdb_ligands):
     common_keys = set(cif_ligands.keys()) & set(pdb_ligands.keys())
     if not common_keys:
         raise ValueError("No common keys found between cif_ligands and pdb_ligands. maybe you need to reindex atoms")
-    for key in common_keys:
+    for key in sorted(common_keys):
+        cif_temp_path = None
+        pdb_temp_path = None
         try:
             # Create a temporary file
 
             with tempfile.NamedTemporaryFile(suffix='.pdb', delete=False) as cif_temp, \
                  tempfile.NamedTemporaryFile(suffix='.pdb', delete=False) as pdb_temp:
+                cif_temp_path = cif_temp.name
+                pdb_temp_path = pdb_temp.name
                 
                 save_ligand_residue(cif_ligands[key], cif_temp.name)
                 save_ligand_residue(pdb_ligands[key], pdb_temp.name)
@@ -444,10 +460,20 @@ def calculate_multi_ligand_rmsd(cif_ligands, pdb_ligands):
                 
             # Clean up temporary files
 
-            os.unlink(cif_temp.name)
-            os.unlink(pdb_temp.name)
+            os.unlink(cif_temp_path)
+            os.unlink(pdb_temp_path)
         except Exception as e:
-            print(f"Error processing {key}: {str(e)}")
+            try:
+                dist, rmsd = calculate_ligand_atom_order_rmsd(cif_ligands[key], pdb_ligands[key])
+                ligand_rmsds.append(rmsd)
+                atom_distances.append(dist)
+                print(f"RDKit ligand mapping failed for {key}; used atom-order RMSD fallback: {e}")
+            except Exception as fallback_exc:
+                print(f"Error processing {key}: {str(e)}; fallback failed: {fallback_exc}")
+        finally:
+            for tmp_path in (cif_temp_path, pdb_temp_path):
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
     
     return {
         'ligand_rmsd_mean': np.mean(ligand_rmsds) if ligand_rmsds else None,
@@ -585,8 +611,8 @@ def align_molecules_from_pdb_files(smiles, pdb_file1, pdb_file2):
     # Get canonical SMILES to check for structural consistency
     mol1_smiles = Chem.MolToSmiles(mol1, canonical=True)
     mol2_smiles = Chem.MolToSmiles(mol2, canonical=True)
-    print(f"mol1 SMILES: {mol1_smiles}")
-    print(f"mol2 SMILES: {mol2_smiles}")
+    if mol1_smiles != mol2_smiles:
+        raise ValueError(f"Ligand SMILES mismatch: {mol1_smiles} vs {mol2_smiles}")
 
     # Molecular matching
     matches1 = mol1.GetSubstructMatch(ref_mol)
@@ -777,9 +803,9 @@ def calculate_ca_rmsd(cif_file, pdb_file,fixed_chains=None):
     else:
         return {
             'protein_rmsd': [binder_rmsd,protein_rmsd],
-            'ligand_rmsd': 100,
+            'ligand_rmsd': [100],
             'ligand_count': 1,
-            'atom_distances': 100,
+            'atom_distances': [100],
             'dna_rmsd': dna_rmsd,
             'rna_rmsd': rna_rmsd
         }

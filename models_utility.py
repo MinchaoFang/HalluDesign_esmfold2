@@ -47,6 +47,7 @@ def esmfold2_op_eval(
     symmetry_chains,
     symmetry_segments,
     sm,
+    ccd,
     dna,
     rna,
     cdr,
@@ -113,7 +114,7 @@ def esmfold2_op_eval(
             )
 
         pocket_res = []
-        if sm or dna or rna:
+        if sm or ccd or dna or rna:
             pocket_res = find_pocket_residues_based_on_distance(
                 pdbfile=copied_file,
                 cutoff=8.0,
@@ -149,6 +150,7 @@ def esmfold2_op_eval(
                 output_dir=eval_dir,
                 template_path=template_path_for_eval,
                 sm=sm,
+                ccd=ccd,
                 dna=dna,
                 rna=rna,
                 chain_types=chain_types,
@@ -204,8 +206,15 @@ def esmfold2_op_eval(
                 protein_count += 1
 
             elif chain == "ligand":
-                if sm_count < len(sm):
-                    input_json[0]["sequences"][count]["ligand"]["ligand"] = sm[sm_count]
+                ligand_block = input_json[0]["sequences"][count]["ligand"]
+                if sm_count < len(ccd):
+                    ligand_block.pop("ligand", None)
+                    ligand_block.pop("smiles", None)
+                    ligand_block["ccdCodes"] = [ccd[sm_count]]
+                elif sm_count < len(sm):
+                    ligand_block.pop("ccd", None)
+                    ligand_block.pop("ccdCodes", None)
+                    ligand_block["ligand"] = sm[sm_count]
                 sm_count += 1
 
             elif chain == "dna":
@@ -225,21 +234,32 @@ def esmfold2_op_eval(
         with open(json_path, "w") as handle:
             json.dump(input_json, handle, indent=2)
 
-        full_diffusion_steps = getattr(designer_model, "full_diffusion_steps", 68)
         if cycle == 0 and random_init:
+            print(f"{backend_name} full prediction from random-initialized sequence")
             results_op = designer_model.predict(
                 input_json_path=json_path,
                 dump_dir=target_dir,
                 seed=123,
             )
-        elif ref_time_steps >= full_diffusion_steps:
-            print("pure ESMFold2 prediction")
+        elif (
+            getattr(designer_model, "num_sampling_steps", None) is not None
+            and int(ref_time_steps) >= int(designer_model.num_sampling_steps)
+        ):
+            print(
+                f"{backend_name} full prediction from sequence/SMILES because "
+                f"ref_time_steps={int(ref_time_steps)} >= "
+                f"esmfold2_num_sampling_steps={int(designer_model.num_sampling_steps)}"
+            )
             results_op = designer_model.predict(
                 input_json_path=json_path,
                 dump_dir=target_dir,
                 seed=123,
             )
         else:
+            print(
+                f"{backend_name} coordinate refinement: requested "
+                f"{int(ref_time_steps)} denoising steps"
+            )
             print(json_path, copied_file)
             results_op = designer_model.predict(
                 input_json_path=json_path,

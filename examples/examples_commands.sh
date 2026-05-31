@@ -10,6 +10,7 @@ python ./HalluDesign_esmfold2_run.py \
   --num_recycles 10 \
   --ref_time_steps 6 \
   --esmfold2_num_loops 3 \
+  --esmfold2_num_sampling_steps 50 \
   --esmfold2_dtype float32
 
 # Protein-ligand optimization with Biohub ESMFold2.
@@ -23,4 +24,5 @@ python ./HalluDesign_esmfold2_run.py \
   --num_recycles 10 \
   --ref_time_steps 6 \
   --esmfold2_num_loops 3 \
+  --esmfold2_num_sampling_steps 50 \
   --esmfold2_dtype float32

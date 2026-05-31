@@ -1,5 +1,11 @@
-transformers @ git+https://github.com/Biohub/transformers.git@3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf
-esm @ git+https://github.com/Biohub/esm.git@c94ed8d
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+packaging
+setuptools
+wheel
+ninja
+transformers @ git+https://github.com/Biohub/transformers.git@main
+esm@git+https://github.com/Biohub/esm.git@main
 filelock
 numpy
 pandas
@@ -10,4 +16,3 @@ prody
 scikit-learn
 ml-collections
 dm-tree
-torch>=2.2.0

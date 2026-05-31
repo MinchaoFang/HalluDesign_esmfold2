@@ -35,7 +35,7 @@ the Biohub ESMFold2 backend.
 | `--esmfold2_model_path` | Local ESMFold2 checkpoint path or Hugging Face model name. Defaults to the tested local snapshot under `/storage/caolab/fangmc/cache/huggingface/hub`. |
 | `--esmc_model_path` | Local ESMC-6B checkpoint path or Hugging Face model name. Defaults to the tested local snapshot under `/storage/caolab/fangmc/cache/huggingface/hub`. |
 | `--esmfold2_num_loops` | Number of ESMFold2 trunk refinement loops. Default: `3`. |
-| `--esmfold2_num_sampling_steps` | Raw ESMFold2 diffusion schedule length. Use `0` to keep the checkpoint config. Default: `0`; the tested local snapshot config uses `14`. |
+| `--esmfold2_num_sampling_steps` | ESMFold2 diffusion schedule length for full prediction/refinement. Default: `50`, matching the Biohub ESMFold2 GitHub example. Use `0` only to keep the checkpoint config, which is `14` in the tested local snapshot. |
 | `--esmfold2_dtype` | Model dtype: `float32`, `bfloat16`, or `float16`. Default: `float32`, matching the tested ESMFold2 setup. |
 | `--esmfold2_allow_download` | Allow Hugging Face download. By default the runner uses local files only. |
 | `--esmfold2_chunk_size` | Chunk size for memory control. Use `0` to keep the model default. |
@@ -47,12 +47,13 @@ known-working local configuration in
 `/storage/caolab/fangmc/code/af3_qa/esmfold2_eval.py`, with an extra internal
 `_esmc` assignment needed by the installed Biohub `transformers` forward path.
 
-For the tested local snapshot, the checkpoint config uses 14 raw diffusion
-steps. With the default `--esmfold2_max_inference_sigma 256`, the high-sigma
-tail is capped and the effective denoising schedule has 10 steps. Keep
-`--ref_time_steps` below that effective count if you want coordinate-initialized
-refinement; values greater than or equal to the effective count intentionally
-fall back to pure ESMFold2 prediction.
+The default full ESMFold2 setting is `--esmfold2_num_sampling_steps 50`, matching
+the Biohub example. `--ref_time_steps` controls how many final denoising steps
+are run from the current HalluDesign coordinates. If a larger value is requested
+than the current effective schedule supports, the runner clamps it to the
+largest coordinate-refinement value supported by that schedule instead of
+switching to pure ESMFold2 prediction. Pure prediction is only used when no
+initial coordinates are provided, or for the first cycle of `--random_init`.
 
 ## Output
 

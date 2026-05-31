@@ -16,6 +16,17 @@ conda activate HalluDesign_esmfold2
 pip install -r requirements.txt
 ```
 
+`flash-attn` is optional. On older cluster systems such as glibc 2.28, the PyPI
+wheel can require a newer glibc and fail to import. In that case, leave it
+uninstalled; ESMC can fall back to PyTorch attention. If you want to try a local
+source build:
+
+```bash
+pip install "torch==2.5.1+cu121" packaging setuptools wheel ninja \
+  --extra-index-url https://download.pytorch.org/whl/cu121
+pip install "flash-attn==2.7.3"   --no-build-isolation   --no-binary=flash-attn   --no-cache-dir
+```
+
 ## Example
 
 Monomer optimization:
@@ -60,14 +71,15 @@ The model loader uses `local_files_only=True` by default; add
 
 - Use the HalluDesign template JSON files under `examples/*/template_*.json`.
 - `--esmfold2_num_sampling_steps 0` means use the checkpoint config. For the
-  tested local ESMFold2 snapshot this is 14 raw diffusion steps. After the
-  default `--esmfold2_max_inference_sigma 256` cap, the effective denoising
-  schedule has 10 steps.
+  tested local ESMFold2 snapshot this is 14 raw diffusion steps. The runner
+  defaults to `--esmfold2_num_sampling_steps 50`, matching the Biohub ESMFold2
+  GitHub example.
 - `--ref_time_steps` means the number of final ESMFold2 denoising steps to run
-  from the current HalluDesign structure. If it is greater than or equal to the
-  effective ESMFold2 denoising step count, the runner uses pure prediction.
-  The default is `6`, so the optimization branch refines from current
-  coordinates by default.
+  from the current HalluDesign structure. If it is greater than the largest
+  coordinate-refinement step count supported by the effective ESMFold2 schedule,
+  the runner clamps it and still uses the current coordinates. Pure prediction
+  is only used when no initial coordinates are available, or for the first
+  `--random_init` cycle.
 - ESMFold2 and ESMC-6B are loaded separately and run in `float32` by default,
   matching the known-working `esmfold2_eval.py` setup.
 - `FILE_` ligands, PTMs, and covalent/enzyme-design bonds are not wired in this

@@ -21,6 +21,7 @@ def self_consistency_esmfold2(
     output_dir,
     template_path,
     sm,
+    ccd,
     dna,
     rna,
     chain_types,
@@ -57,8 +58,15 @@ def self_consistency_esmfold2(
                     input_json[0]["sequences"][count]["proteinChain"]["sequence"] = seq_by_chain[protein_count]
                 protein_count += 1
             elif chain == "ligand":
-                if sm_count < len(sm):
-                    input_json[0]["sequences"][count]["ligand"]["ligand"] = sm[sm_count]
+                ligand_block = input_json[0]["sequences"][count]["ligand"]
+                if sm_count < len(ccd):
+                    ligand_block.pop("ligand", None)
+                    ligand_block.pop("smiles", None)
+                    ligand_block["ccdCodes"] = [ccd[sm_count]]
+                elif sm_count < len(sm):
+                    ligand_block.pop("ccd", None)
+                    ligand_block.pop("ccdCodes", None)
+                    ligand_block["ligand"] = sm[sm_count]
                 sm_count += 1
             elif chain == "dna":
                 if dna_count < len(dna):

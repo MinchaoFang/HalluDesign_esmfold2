@@ -163,7 +163,12 @@ def _sample_with_halludesign_refinement(
 
     atom_mask = ref_mask.repeat_interleave(num_diffusion_samples, 0).float()
     init_coords = getattr(self, "_hallu_init_coords", None)
+    fixed_atom_mask = getattr(self, "_hallu_fixed_atom_mask", None)
     refinement_steps = getattr(self, "_hallu_refinement_steps", None)
+    if fixed_atom_mask is not None:
+        fixed_atom_mask = fixed_atom_mask.to(device=device, dtype=torch.bool)
+        if fixed_atom_mask.shape[0] != n_atoms or not bool(fixed_atom_mask.any()):
+            fixed_atom_mask = None
 
     full_num_steps = max(0, len(schedule) - 1)
     use_refinement = (
@@ -190,8 +195,11 @@ def _sample_with_halludesign_refinement(
             x = x.unsqueeze(0)
         if x.shape[0] == 1 and target_batch > 1:
             x = x.repeat_interleave(target_batch, 0)
+        fixed_reference = x[:, fixed_atom_mask, :].clone() if fixed_atom_mask is not None else None
         sigma0 = schedule[0]
         x = x + sigma0 * torch.randn_like(x)
+        if fixed_reference is not None:
+            x[:, fixed_atom_mask, :] = fixed_reference
     else:
         x = schedule[0] * torch.randn(
             target_batch, n_atoms, 3, device=device, dtype=torch.float32
@@ -214,11 +222,18 @@ def _sample_with_halludesign_refinement(
         x, x_denoised_prev = self._center_random_augmentation(
             x, atom_mask, second_coords=x_denoised_prev
         )
+        fixed_reference = None
+        if fixed_atom_mask is not None:
+            fixed_reference = x[:, fixed_atom_mask, :].clone()
+            if x_denoised_prev is not None:
+                x_denoised_prev[:, fixed_atom_mask, :] = fixed_reference
 
         sigma_tm_val = float(sigma_tm.item())
         t_hat_val = sigma_tm_val * (1.0 + float(gamma.item()))
         eps_std = lam * max(t_hat_val**2 - sigma_tm_val**2, 0.0) ** 0.5
         x_noisy = x + eps_std * torch.randn_like(x)
+        if fixed_reference is not None:
+            x_noisy[:, fixed_atom_mask, :] = fixed_reference
 
         is_last_step = step_idx == num_steps - 1
         request_atom_repr = return_atom_repr and (
@@ -254,6 +269,8 @@ def _sample_with_halludesign_refinement(
         )
 
         x_denoised = dm_out["x_denoised"]
+        if fixed_reference is not None:
+            x_denoised[:, fixed_atom_mask, :] = fixed_reference
         token_repr = dm_out["token_repr"]
         if request_atom_repr:
             diff_atom_intermediates = dm_out.get("atom_intermediates")
@@ -267,6 +284,8 @@ def _sample_with_halludesign_refinement(
         sigma_t_val = float(sigma_t.item())
         denoised_over_sigma = (x_noisy - x_denoised) / t_hat_val
         x = x_noisy + eta * (sigma_t_val - t_hat_val) * denoised_over_sigma
+        if fixed_reference is not None:
+            x[:, fixed_atom_mask, :] = fixed_reference
 
         if (
             denoising_early_exit_rmsd is not None
@@ -407,17 +426,44 @@ class ESMFold2Inferrer:
         features, chain_infos = self.input_builder.prepare_input(
             spi, seed=seed, device=self.model.device
         )
-        init_coords = self._load_initial_coords(
+        diffusion_steps = int(diffusion_steps or 0)
+        configured_sampling_steps = self.num_sampling_steps
+        if configured_sampling_steps is None:
+            configured_sampling_steps = getattr(
+                self.model.structure_head, "inference_num_steps", 0
+            )
+        if (
+            input_atom_array_path
+            and configured_sampling_steps
+            and diffusion_steps >= int(configured_sampling_steps)
+        ):
+            print(
+                "ESMFold2 full prediction from sequence/SMILES because "
+                f"ref_time_steps={diffusion_steps} >= "
+                f"esmfold2_num_sampling_steps={int(configured_sampling_steps)}; "
+                "ignoring input structure."
+            )
+            input_atom_array_path = ""
+            diffusion_steps = 0
+
+        init_coords = None
+        fixed_atom_mask = None
+        loaded_coords = self._load_initial_coords(
             input_atom_array_path, features, chain_infos
         )
+        if loaded_coords is not None:
+            init_coords, fixed_atom_mask = loaded_coords
 
-        if init_coords is None and input_atom_array_path and diffusion_steps:
+        diffusion_steps = int(diffusion_steps or 0)
+        if init_coords is not None and input_atom_array_path:
+            diffusion_steps = self._normalize_refinement_steps(diffusion_steps)
+        elif init_coords is None and input_atom_array_path and diffusion_steps:
             print(
                 "ESMFold2 refinement requested, but initial coordinates could not be mapped; "
                 "falling back to pure ESMFold2 prediction."
             )
 
-        output = self._run_model(features, init_coords, diffusion_steps, seed)
+        output = self._run_model(features, init_coords, fixed_atom_mask, diffusion_steps, seed)
         decoded = self.input_builder.decode(
             output,
             features,
@@ -437,6 +483,7 @@ class ESMFold2Inferrer:
         self,
         features: dict[str, Any],
         init_coords: torch.Tensor | None,
+        fixed_atom_mask: torch.Tensor | None,
         diffusion_steps: int,
         seed: int,
     ) -> dict[str, torch.Tensor]:
@@ -444,6 +491,7 @@ class ESMFold2Inferrer:
         old_sample = head.sample
         head.sample = types.MethodType(_sample_with_halludesign_refinement, head)
         head._hallu_init_coords = init_coords
+        head._hallu_fixed_atom_mask = fixed_atom_mask
         head._hallu_refinement_steps = int(diffusion_steps)
         head._hallu_max_inference_sigma = self.max_inference_sigma
         head._hallu_noise_scale = self.noise_scale
@@ -460,6 +508,7 @@ class ESMFold2Inferrer:
             head.sample = old_sample
             for attr in (
                 "_hallu_init_coords",
+                "_hallu_fixed_atom_mask",
                 "_hallu_refinement_steps",
                 "_hallu_max_inference_sigma",
                 "_hallu_noise_scale",
@@ -477,6 +526,31 @@ class ESMFold2Inferrer:
             schedule = schedule[schedule <= float(self.max_inference_sigma)]
             schedule = F.pad(schedule, (1, 0), value=float(self.max_inference_sigma))
         return max(0, int(schedule.shape[0]) - 1)
+
+    def _normalize_refinement_steps(self, requested_steps: int) -> int:
+        requested_steps = max(0, int(requested_steps))
+        if requested_steps == 0:
+            return 0
+
+        max_refinement_steps = max(0, int(self.full_diffusion_steps) - 1)
+        if max_refinement_steps <= 0:
+            print(
+                "ESMFold2 coordinate refinement requested, but the effective denoising "
+                "schedule has no refinement steps; using the input coordinates."
+            )
+            return 0
+
+        if requested_steps > max_refinement_steps:
+            print(
+                "ESMFold2 coordinate refinement requested "
+                f"{requested_steps} steps; effective full denoising schedule has "
+                f"{self.full_diffusion_steps} steps, so clamping to "
+                f"{max_refinement_steps} refinement steps."
+            )
+            return max_refinement_steps
+
+        print(f"ESMFold2 coordinate refinement using {requested_steps} denoising steps.")
+        return requested_steps
 
     @staticmethod
     def _ccd_cache_dir(model_name: str) -> Path | None:
@@ -561,7 +635,7 @@ class ESMFold2Inferrer:
         input_atom_array_path: str,
         features: dict[str, Any],
         chain_infos: list[Any],
-    ) -> torch.Tensor | None:
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | None:
         if not input_atom_array_path:
             return None
         if not os.path.exists(input_atom_array_path):
@@ -578,7 +652,8 @@ class ESMFold2Inferrer:
         if os.path.exists(pdb_path):
             mapped = self._map_pdb_coords_to_features(pdb_path, features, chain_infos)
             if mapped is not None:
-                return self._center_coords(mapped, atom_mask)
+                coords, fixed_atom_mask = mapped
+                return self._center_coords(coords, atom_mask), fixed_atom_mask
             return None
 
         try:
@@ -589,7 +664,7 @@ class ESMFold2Inferrer:
             if coords.dim() == 3 and coords.shape[0] == 1:
                 coords = coords[0]
             if coords.shape == (n_atoms, 3):
-                return self._center_coords(coords, atom_mask)
+                return self._center_coords(coords, atom_mask), None
         except Exception as exc:
             print(f"Unable to load ESMFold2 initial coordinate tensor: {exc}")
 
@@ -610,7 +685,7 @@ class ESMFold2Inferrer:
         pdb_path: str,
         features: dict[str, Any],
         chain_infos: list[Any],
-    ) -> torch.Tensor | None:
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | None:
         try:
             from Bio.PDB import PDBParser
         except Exception:
@@ -689,16 +764,18 @@ class ESMFold2Inferrer:
                     for atom_index in range(token.atom_start, token.atom_start + token.atom_count):
                         coords[atom_index] = features["ref_pos"][0, atom_index].detach().cpu().float()
                         found[atom_index] = False
-                if is_polymer:
+                if not is_polymer:
                     print(
                         f"ESMFold2 coordinate mapping matched {chain_matched}/{chain_required} atoms "
-                        f"for polymer chain {chain_id}; not using current coordinates for refinement."
+                        f"for non-polymer chain {chain_id}; using ESMFold2 reference coordinates for that chain."
                     )
-                    return None
+                    chain_match_stats.append((chain_id, chain_matched, chain_required))
+                    continue
                 print(
                     f"ESMFold2 coordinate mapping matched {chain_matched}/{chain_required} atoms "
-                    f"for non-polymer chain {chain_id}; using ESMFold2 reference coordinates for that chain."
+                    f"for polymer chain {chain_id}; not using current coordinates for refinement."
                 )
+                return None
             chain_match_stats.append((chain_id, chain_matched, chain_required))
 
         polymer_found = False
@@ -727,7 +804,7 @@ class ESMFold2Inferrer:
         atom_mask = features["atom_attention_mask"][0].detach().cpu().bool()
         mapped_chain_atom_mask = torch.zeros(n_atoms, dtype=torch.bool)
         for chain, (_chain_id, matched, required) in zip(chain_infos, chain_match_stats):
-            if required and matched / required >= 0.95:
+            if int(chain.mol_type) in (0, 1, 2) and required and matched / required >= 0.95:
                 for token in chain.tokens:
                     for atom_index in range(token.atom_start, token.atom_start + token.atom_count):
                         mapped_chain_atom_mask[atom_index] = True
@@ -740,7 +817,7 @@ class ESMFold2Inferrer:
                 "not using current coordinates for refinement."
             )
             return None
-        return coords
+        return coords, None
 
     def _match_nonpolymer_atom(
         self,
