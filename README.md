@@ -86,6 +86,9 @@ The model loader uses `local_files_only=True` by default; add
   from the current HalluDesign structure. If it is greater than or equal to
   `--esmfold2_num_sampling_steps`, the runner ignores the current coordinates
   and runs pure ESMFold2 prediction from sequence plus SMILES/CCD.
+- `--esmfold2_num_diffusion_samples` defaults to `5`. HalluDesign decodes all
+  ESMFold2 samples, selects the one with the highest ranking score, and writes
+  that selected structure to the downstream-compatible `sample_0.cif` path.
 - ESMFold2 and ESMC-6B are loaded separately and run in `float32` by default,
   matching the known-working `esmfold2_eval.py` setup.
 - `FILE_` ligands, PTMs, and covalent/enzyme-design bonds are not wired in this

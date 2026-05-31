@@ -417,7 +417,7 @@ class ESMFold2Inferrer:
         esmc_model_name: str = DEFAULT_ESMC_MODEL_PATH,
         num_loops: int = 3,
         num_sampling_steps: int = 0,
-        num_diffusion_samples: int = 1,
+        num_diffusion_samples: int = 5,
         dtype: str = "float32",
         local_files_only: bool = True,
         device: str = "auto",
@@ -432,11 +432,7 @@ class ESMFold2Inferrer:
         self.backend_name = "ESMFold2"
         self.num_loops = num_loops
         self.num_sampling_steps = num_sampling_steps if num_sampling_steps > 0 else None
-        if num_diffusion_samples != 1:
-            warnings.warn(
-                "HalluDesign metrics currently expect sample_0; using one ESMFold2 diffusion sample."
-            )
-        self.num_diffusion_samples = 1
+        self.num_diffusion_samples = max(1, int(num_diffusion_samples))
         self.dtype = _torch_dtype(dtype)
         self.local_files_only = local_files_only
         self.max_inference_sigma = max_inference_sigma
@@ -499,6 +495,7 @@ class ESMFold2Inferrer:
         self.input_builder = ESMFold2InputBuilder(ccd_cache=ccd_cache)
         self.full_diffusion_steps = self._effective_diffusion_steps()
         print(f"Effective ESMFold2 denoising steps: {self.full_diffusion_steps}")
+        print(f"ESMFold2 diffusion samples per prediction: {self.num_diffusion_samples}")
         if self.cyclic:
             print(
                 "ESMFold2 cyclic residue-index positional encoding enabled "
@@ -575,7 +572,29 @@ class ESMFold2Inferrer:
             num_diffusion_samples=self.num_diffusion_samples,
             complex_id=tag,
         )
-        result = decoded[0] if isinstance(decoded, list) else decoded
+        candidates = decoded if isinstance(decoded, list) else [decoded]
+        candidate_scores = [self._score_tuple_from_result(candidate) for candidate in candidates]
+        ranking_scores = [score[0] for score in candidate_scores]
+        best_index = max(range(len(candidates)), key=lambda idx: ranking_scores[idx])
+        result = candidates[best_index]
+
+        for sample_index, candidate in enumerate(candidates):
+            candidate_path = os.path.join(
+                output_dir,
+                f"{tag}_seed_{seed}_candidate_{sample_index}.cif",
+            )
+            with open(candidate_path, "w") as handle:
+                handle.write(candidate.complex.to_mmcif())
+
+        sample_score_text = ", ".join(
+            f"{idx}:rank={rank:.4f},iptm={iptm:.4f},ptm={ptm:.4f}"
+            for idx, (rank, iptm, ptm) in enumerate(candidate_scores)
+        )
+        print(
+            "ESMFold2 selected diffusion sample "
+            f"{best_index}/{len(candidates) - 1}; "
+            f"{sample_score_text}"
+        )
 
         cif_path = os.path.join(output_dir, f"{tag}_seed_{seed}_sample_0.cif")
         with open(cif_path, "w") as handle:
@@ -1026,6 +1045,23 @@ class ESMFold2Inferrer:
             found[atom_index] = True
         return True
 
+    def _global_confidence_from_result(self, result: Any) -> tuple[float, float]:
+        ptm = float(result.ptm) if result.ptm is not None else float("nan")
+        iptm = float(result.iptm) if result.iptm is not None else ptm
+        if np.isnan(iptm):
+            iptm = float(result.plddt.mean().item()) if result.plddt is not None else 0.0
+        if np.isnan(ptm):
+            ptm = iptm
+        return float(iptm), float(ptm)
+
+    def _score_tuple_from_result(self, result: Any) -> tuple[float, float, float]:
+        iptm, ptm = self._global_confidence_from_result(result)
+        ranking_score = 0.8 * iptm + 0.2 * ptm
+        return float(ranking_score), iptm, ptm
+
+    def _ranking_score_from_result(self, result: Any) -> float:
+        return self._score_tuple_from_result(result)[0]
+
     def _format_halludesign_result(
         self,
         result: Any,
@@ -1039,11 +1075,8 @@ class ESMFold2Inferrer:
         n_chains = max(1, len(unique_asym))
         n_tokens = len(token_asym_id)
 
-        ptm = float(result.ptm) if result.ptm is not None else float("nan")
-        iptm = float(result.iptm) if result.iptm is not None else ptm
-        if np.isnan(iptm):
-            iptm = float(result.plddt.mean().item()) if result.plddt is not None else 0.0
-        ranking_score = 0.8 * iptm + 0.2 * (ptm if not np.isnan(ptm) else iptm)
+        iptm, ptm = self._global_confidence_from_result(result)
+        ranking_score = self._ranking_score_from_result(result)
 
         if result.pair_chains_iptm is not None:
             chain_pair_iptm = result.pair_chains_iptm.float()
@@ -1067,6 +1100,8 @@ class ESMFold2Inferrer:
             "summary_confidence": [
                 {
                     "ranking_score": float(ranking_score),
+                    "iptm": float(iptm),
+                    "ptm": float(ptm),
                     "chain_iptm": chain_iptm,
                     "chain_ptm": chain_ptm,
                     "chain_pair_iptm": chain_pair_iptm,

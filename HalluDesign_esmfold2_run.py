@@ -69,7 +69,8 @@ def parse_arguments():
     parser.add_argument("--esmfold2_model_path", type=str, default=DEFAULT_ESMFOLD2_MODEL_PATH)
     parser.add_argument("--esmc_model_path", type=str, default=DEFAULT_ESMC_MODEL_PATH)
     parser.add_argument("--esmfold2_num_loops", type=int, default=3)
-    parser.add_argument("--esmfold2_num_sampling_steps", type=int, default=50)
+    parser.add_argument("--esmfold2_num_sampling_steps", type=int, default=200)
+    parser.add_argument("--esmfold2_num_diffusion_samples", type=int, default=5)
     parser.add_argument(
         "--esmfold2_dtype",
         type=str,
@@ -155,6 +156,7 @@ def main():
         esmc_model_name=args.esmc_model_path,
         num_loops=args.esmfold2_num_loops,
         num_sampling_steps=args.esmfold2_num_sampling_steps,
+        num_diffusion_samples=args.esmfold2_num_diffusion_samples,
         dtype=args.esmfold2_dtype,
         local_files_only=not args.esmfold2_allow_download,
         device=args.esmfold2_device,

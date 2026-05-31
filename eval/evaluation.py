@@ -109,8 +109,8 @@ def self_consistency_esmfold2(
         metric["eval_path"] = cif_path
         metric["prediction_model"] = results_eval.get("model_name", "ESMFold2")
         metric["eval_plddt"] = calculate_average_b_factor(cif_path, [f"{label}" for label in chain_labels])
-        metric["eval_iptm"] = _mean_value(chain_iptm)
-        metric["eval_ptm"] = _mean_value(chain_ptm)
+        metric["eval_iptm"] = _summary_scalar(summary, "iptm", chain_iptm)
+        metric["eval_ptm"] = _summary_scalar(summary, "ptm", chain_ptm)
         metric["eval_pae"] = None
         metric["eval_pde"] = None
         metric["eval_ipae"] = None
@@ -147,6 +147,7 @@ def self_consistency_esmfold2(
             f"eval_plddt={metric.get('eval_plddt')}, "
             f"eval_iptm={metric.get('eval_iptm')}, "
             f"eval_ptm={metric.get('eval_ptm')}, "
+            f"ranking_score={_summary_scalar(summary, 'ranking_score', None)}, "
             f"eval_path={metric.get('eval_path')}"
         )
         seq_count += 1
@@ -329,8 +330,8 @@ def process_confidence_metrics_esmfold2(
         metrics = {
             "op_cif_path": cif_path,
             "HalluDesign_Status": "ESMFold2_success",
-            "op_iptm": _mean_value(chain_iptm),
-            "op_ptm": _mean_value(chain_ptm),
+            "op_iptm": _summary_scalar(summary, "iptm", chain_iptm),
+            "op_ptm": _summary_scalar(summary, "ptm", chain_ptm),
             "op_pae": float(pae.mean()) if pae.size else None,
             "op_pde": None,
             "op_ipae": global_ipae,
@@ -403,6 +404,13 @@ def _mean_value(value):
         return _to_float(value.mean())
     array = np.asarray(value, dtype=np.float32)
     return float(array.mean()) if array.size else None
+
+
+def _summary_scalar(summary, key, fallback):
+    value = summary.get(key)
+    if value is not None:
+        return _to_float(value)
+    return _mean_value(fallback)
 
 
 def _indexed_value(value, index):

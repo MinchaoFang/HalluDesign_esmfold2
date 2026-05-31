@@ -37,6 +37,7 @@ the Biohub ESMFold2 backend.
 | `--esmc_model_path` | Local ESMC-6B checkpoint path or Hugging Face model name. Defaults to the tested local snapshot under `/storage/caolab/fangmc/cache/huggingface/hub`. |
 | `--esmfold2_num_loops` | Number of ESMFold2 trunk refinement loops. Default: `3`. |
 | `--esmfold2_num_sampling_steps` | ESMFold2 diffusion schedule length for full prediction/refinement. Default: `50`, matching the Biohub ESMFold2 GitHub example. Use `0` only to keep the checkpoint config, which is `14` in the tested local snapshot. |
+| `--esmfold2_num_diffusion_samples` | Number of ESMFold2 diffusion samples per prediction. Default: `5`; the highest-ranking sample is selected for the next HalluDesign cycle. |
 | `--esmfold2_dtype` | Model dtype: `float32`, `bfloat16`, or `float16`. Default: `float32`, matching the tested ESMFold2 setup. |
 | `--esmfold2_allow_download` | Allow Hugging Face download. By default the runner uses local files only. |
 | `--esmfold2_chunk_size` | Chunk size for memory control. Use `0` to keep the model default. |
