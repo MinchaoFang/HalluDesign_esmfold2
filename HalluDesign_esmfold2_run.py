@@ -42,11 +42,28 @@ def parse_arguments():
     parser.add_argument("--mpnn_temperature", type=float, default=0.1)
     parser.add_argument("--dna", type=str, nargs="+", required=False, default=[])
     parser.add_argument("--rna", type=str, nargs="+", required=False, default=[])
-    parser.add_argument("--design_epoch_begin", type=int, required=False, default=0)
+    parser.add_argument(
+        "--design_epoch_begin",
+        type=int,
+        required=False,
+        default=0,
+        help=(
+            "0-based recycle where multi-seq MPNN evaluation begins; "
+            "earlier cycles run single-seq warmup."
+        ),
+    )
     parser.add_argument("--symmetry_residues", type=str, default="")
     parser.add_argument("--symmetry_chains", type=str, default="")
     parser.add_argument("--symmetry_segments", type=int, default=0)
-    parser.add_argument("--cyclic", type=int, default=0)
+    parser.add_argument(
+        "--cyclic",
+        type=int,
+        default=0,
+        help=(
+            "Use cyclic residue-index positional encoding: "
+            "1 for the first protein chain, 3 for the first three protein chains."
+        ),
+    )
     parser.add_argument("--random_init", action="store_true", default=False)
 
     parser.add_argument("--esmfold2_model_path", type=str, default=DEFAULT_ESMFOLD2_MODEL_PATH)
@@ -143,6 +160,7 @@ def main():
         device=args.esmfold2_device,
         chunk_size=chunk_size,
         max_inference_sigma=args.esmfold2_max_inference_sigma,
+        cyclic=args.cyclic,
     )
 
     protein_chains, ligand_chains, dna_chains, rna_chains, chain_types = (
@@ -184,6 +202,10 @@ def main():
                 mpnn_config_dict["num_seqs"] = args.num_seqs
             else:
                 mpnn_config_dict["num_seqs"] = 1
+            print(
+                f"begin multi-batch evaluation {design_begin}; "
+                f"MPNN num_seqs={mpnn_config_dict['num_seqs']}"
+            )
 
             metrics = copy.deepcopy(metrics_template)
             try:

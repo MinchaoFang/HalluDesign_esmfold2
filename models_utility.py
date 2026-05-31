@@ -138,7 +138,10 @@ def esmfold2_op_eval(
             bais_per_residues,
         )
 
-        print(f"design begin {design_begin}")
+        print(
+            f"design begin {design_begin}; "
+            f"MPNN num_seqs={mpnn_config_dict['num_seqs']}"
+        )
         if design_begin:
             print(f"{backend_name} evaluation")
             eval_dir = copied_file.replace(".pdb", f"{backend_name.lower()}_eval")
@@ -161,6 +164,13 @@ def esmfold2_op_eval(
                 metrics=metrics,
                 random_init=random_init,
             )
+            if metrics:
+                print(
+                    f"{backend_name} evaluation selected packed_path={metrics[0].get('packed_path')}; "
+                    f"eval_plddt={metrics[0].get('eval_plddt')}, "
+                    f"eval_iptm={metrics[0].get('eval_iptm')}, "
+                    f"eval_ptm={metrics[0].get('eval_ptm')}"
+                )
         else:
             print(f"no {backend_name} evaluation")
 

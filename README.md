@@ -74,12 +74,18 @@ The model loader uses `local_files_only=True` by default; add
   tested local ESMFold2 snapshot this is 14 raw diffusion steps. The runner
   defaults to `--esmfold2_num_sampling_steps 50`, matching the Biohub ESMFold2
   GitHub example.
+- `--design_epoch_begin` is 0-based. Before this recycle, the runner still uses
+  MPNN, but only with `num_seqs=1`, and skips ESMFold2 self-consistency
+  evaluation. From this recycle onward it uses `--num_seqs` and runs multi-seq
+  evaluation before choosing the next structure.
+- `--cyclic 1` changes ESMFold2 relative residue-index positional encoding for
+  the first protein chain to cyclic shortest-path distances. `--cyclic 3` applies
+  the same encoding to the first three protein chains. It does not add a
+  head-tail covalent bond.
 - `--ref_time_steps` means the number of final ESMFold2 denoising steps to run
-  from the current HalluDesign structure. If it is greater than the largest
-  coordinate-refinement step count supported by the effective ESMFold2 schedule,
-  the runner clamps it and still uses the current coordinates. Pure prediction
-  is only used when no initial coordinates are available, or for the first
-  `--random_init` cycle.
+  from the current HalluDesign structure. If it is greater than or equal to
+  `--esmfold2_num_sampling_steps`, the runner ignores the current coordinates
+  and runs pure ESMFold2 prediction from sequence plus SMILES/CCD.
 - ESMFold2 and ESMC-6B are loaded separately and run in `float32` by default,
   matching the known-working `esmfold2_eval.py` setup.
 - `FILE_` ligands, PTMs, and covalent/enzyme-design bonds are not wired in this

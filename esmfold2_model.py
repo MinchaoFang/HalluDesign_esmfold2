@@ -85,6 +85,95 @@ def _torch_dtype(dtype_name: str) -> torch.dtype:
     raise ValueError(f"Unsupported ESMFold2 dtype: {dtype_name}")
 
 
+def _relative_position_forward_with_halludesign_cyclic(
+    self,
+    residue_index: torch.Tensor,
+    asym_id: torch.Tensor,
+    sym_id: torch.Tensor,
+    entity_id: torch.Tensor,
+    token_index: torch.Tensor,
+) -> torch.Tensor:
+    """ESMFold2 relative position encoding with cyclic residue-index distances."""
+    bij_same_chain = asym_id.unsqueeze(2) == asym_id.unsqueeze(1)
+    bij_same_residue = residue_index.unsqueeze(2) == residue_index.unsqueeze(1)
+    bij_same_entity = entity_id.unsqueeze(2) == entity_id.unsqueeze(1)
+
+    raw_dij_residue = residue_index.unsqueeze(2) - residue_index.unsqueeze(1)
+    cyclic_dij_residue = raw_dij_residue
+    target_lengths = getattr(self, "_hallu_cyclic_asym_lengths", {})
+
+    for target_asym_id, chain_length in target_lengths.items():
+        chain_length = int(chain_length)
+        if chain_length <= 1:
+            continue
+        chain_mask = asym_id == int(target_asym_id)
+        residue_mask = residue_index < chain_length
+        pair_mask = (
+            chain_mask.unsqueeze(2)
+            & chain_mask.unsqueeze(1)
+            & residue_mask.unsqueeze(2)
+            & residue_mask.unsqueeze(1)
+        )
+        wrapped = raw_dij_residue
+        half_length = chain_length // 2
+        wrapped = torch.where(
+            wrapped > half_length,
+            wrapped - chain_length,
+            wrapped,
+        )
+        wrapped = torch.where(
+            wrapped < -half_length,
+            wrapped + chain_length,
+            wrapped,
+        )
+        cyclic_dij_residue = torch.where(pair_mask, wrapped, cyclic_dij_residue)
+
+    dij_residue = torch.clip(
+        cyclic_dij_residue + self.n_relative_residx_bins,
+        0,
+        2 * self.n_relative_residx_bins,
+    )
+    dij_residue = torch.where(
+        bij_same_chain, dij_residue, 2 * self.n_relative_residx_bins + 1
+    )
+    aij_rel_pos = F.one_hot(dij_residue, 2 * self.n_relative_residx_bins + 2)
+
+    dij_token = torch.clip(
+        token_index.unsqueeze(2)
+        - token_index.unsqueeze(1)
+        + self.n_relative_residx_bins,
+        0,
+        2 * self.n_relative_residx_bins,
+    )
+    dij_token = torch.where(
+        bij_same_chain & bij_same_residue,
+        dij_token,
+        2 * self.n_relative_residx_bins + 1,
+    )
+    aij_rel_token = F.one_hot(dij_token, 2 * self.n_relative_residx_bins + 2)
+
+    dij_chain = torch.clip(
+        sym_id.unsqueeze(2) - sym_id.unsqueeze(1) + self.n_relative_chain_bins,
+        0,
+        2 * self.n_relative_chain_bins,
+    )
+    dij_chain = torch.where(
+        bij_same_chain, 2 * self.n_relative_chain_bins + 1, dij_chain
+    )
+    aij_rel_chain = F.one_hot(dij_chain, 2 * self.n_relative_chain_bins + 2)
+
+    feats = torch.cat(
+        [
+            aij_rel_pos.float(),
+            aij_rel_token.float(),
+            bij_same_entity.float().unsqueeze(-1),
+            aij_rel_chain.float(),
+        ],
+        dim=-1,
+    )
+    return self.embed(feats)
+
+
 @contextmanager
 def _torch_seed(seed: int | None):
     if seed is None:
@@ -336,6 +425,7 @@ class ESMFold2Inferrer:
         max_inference_sigma: float | None = 256.0,
         noise_scale: float | None = None,
         step_scale: float | None = None,
+        cyclic: int = 0,
     ) -> None:
         self.model_name = model_name
         self.esmc_model_name = esmc_model_name
@@ -352,6 +442,7 @@ class ESMFold2Inferrer:
         self.max_inference_sigma = max_inference_sigma
         self.noise_scale = noise_scale
         self.step_scale = step_scale
+        self.cyclic = int(cyclic or 0)
 
         try:
             from esm.models.esmfold2 import (
@@ -408,6 +499,11 @@ class ESMFold2Inferrer:
         self.input_builder = ESMFold2InputBuilder(ccd_cache=ccd_cache)
         self.full_diffusion_steps = self._effective_diffusion_steps()
         print(f"Effective ESMFold2 denoising steps: {self.full_diffusion_steps}")
+        if self.cyclic:
+            print(
+                "ESMFold2 cyclic residue-index positional encoding enabled "
+                f"(mode {self.cyclic})."
+            )
         print("ESMFold2Inferrer initialized.")
 
     def predict(
@@ -463,7 +559,15 @@ class ESMFold2Inferrer:
                 "falling back to pure ESMFold2 prediction."
             )
 
-        output = self._run_model(features, init_coords, fixed_atom_mask, diffusion_steps, seed)
+        cyclic_asym_lengths = self._cyclic_asym_lengths(chain_infos)
+        output = self._run_model(
+            features,
+            init_coords,
+            fixed_atom_mask,
+            diffusion_steps,
+            seed,
+            cyclic_asym_lengths,
+        )
         decoded = self.input_builder.decode(
             output,
             features,
@@ -486,9 +590,12 @@ class ESMFold2Inferrer:
         fixed_atom_mask: torch.Tensor | None,
         diffusion_steps: int,
         seed: int,
+        cyclic_asym_lengths: dict[int, int] | None,
     ) -> dict[str, torch.Tensor]:
         head = self.model.structure_head
         old_sample = head.sample
+        rel_pos = self.model.rel_pos
+        old_rel_pos_forward = rel_pos.forward
         head.sample = types.MethodType(_sample_with_halludesign_refinement, head)
         head._hallu_init_coords = init_coords
         head._hallu_fixed_atom_mask = fixed_atom_mask
@@ -496,6 +603,12 @@ class ESMFold2Inferrer:
         head._hallu_max_inference_sigma = self.max_inference_sigma
         head._hallu_noise_scale = self.noise_scale
         head._hallu_step_scale = self.step_scale
+        if cyclic_asym_lengths:
+            rel_pos.forward = types.MethodType(
+                _relative_position_forward_with_halludesign_cyclic,
+                rel_pos,
+            )
+            rel_pos._hallu_cyclic_asym_lengths = cyclic_asym_lengths
         try:
             with _torch_seed(seed), torch.no_grad():
                 return self.model(
@@ -506,6 +619,9 @@ class ESMFold2Inferrer:
                 )
         finally:
             head.sample = old_sample
+            rel_pos.forward = old_rel_pos_forward
+            if hasattr(rel_pos, "_hallu_cyclic_asym_lengths"):
+                delattr(rel_pos, "_hallu_cyclic_asym_lengths")
             for attr in (
                 "_hallu_init_coords",
                 "_hallu_fixed_atom_mask",
@@ -551,6 +667,53 @@ class ESMFold2Inferrer:
 
         print(f"ESMFold2 coordinate refinement using {requested_steps} denoising steps.")
         return requested_steps
+
+    def _cyclic_asym_lengths(self, chain_infos: list[Any]) -> dict[int, int]:
+        if not self.cyclic:
+            return {}
+
+        protein_chains = [
+            chain
+            for chain in chain_infos
+            if int(getattr(chain, "mol_type", -1)) == 0
+        ]
+        if not protein_chains:
+            return {}
+
+        if self.cyclic == 1:
+            selected_chains = protein_chains[:1]
+        elif self.cyclic == 3:
+            selected_chains = protein_chains[:3]
+        else:
+            selected_chains = protein_chains[:1]
+            warnings.warn(
+                f"Unsupported ESMFold2 cyclic mode {self.cyclic}; applying mode 1 "
+                "to the first protein chain."
+            )
+
+        asym_lengths = {}
+        chain_labels = []
+        for chain in selected_chains:
+            residue_indices = [
+                int(token.residue_index)
+                for token in getattr(chain, "tokens", [])
+                if int(getattr(token, "mol_type", -1)) == 0
+            ]
+            if not residue_indices:
+                continue
+            chain_length = max(residue_indices) + 1
+            asym_id = int(chain.asym_id)
+            asym_lengths[asym_id] = chain_length
+            chain_labels.append(
+                f"{chain.chain_id}(asym_id={asym_id}, length={chain_length})"
+            )
+
+        if chain_labels:
+            print(
+                "Using ESMFold2 cyclic residue-index encoding for "
+                + ", ".join(chain_labels)
+            )
+        return asym_lengths
 
     @staticmethod
     def _ccd_cache_dir(model_name: str) -> Path | None:

@@ -34,8 +34,13 @@ def self_consistency_esmfold2(
 ):
     metrics_to_tile = []
     seq_count = 0
+    print(f"ESMFold2 self-consistency evaluation for {len(metrics)} MPNN sequence(s)")
     for metric in metrics:
         seq = metric["mpnn_sequence"]
+        print(
+            f"  Evaluating MPNN sequence {seq_count + 1}/{len(metrics)} with ESMFold2; "
+            f"packed_path={metric.get('packed_path')}"
+        )
 
         with open(template_path, "r") as handle:
             input_json = copy.deepcopy(__import__("json").load(handle))
@@ -83,6 +88,7 @@ def self_consistency_esmfold2(
         with open(json_path, "w") as handle:
             json.dump(input_json, handle, indent=2)
 
+        print(f"    ESMFold2 eval input: {json_path}")
         results_eval = designer_model.predict(
             input_json_path=json_path,
             dump_dir=output_dir,
@@ -136,10 +142,26 @@ def self_consistency_esmfold2(
                 chain_labels,
             )
 
+        print(
+            f"    ESMFold2 eval result {seq_count + 1}: "
+            f"eval_plddt={metric.get('eval_plddt')}, "
+            f"eval_iptm={metric.get('eval_iptm')}, "
+            f"eval_ptm={metric.get('eval_ptm')}, "
+            f"eval_path={metric.get('eval_path')}"
+        )
         seq_count += 1
         metrics_to_tile.append(metric)
 
     metrics_to_tile.sort(key=lambda item: item["eval_plddt"], reverse=True)
+    if metrics_to_tile:
+        best_metric = metrics_to_tile[0]
+        print(
+            "ESMFold2 self-consistency selected: "
+            f"packed_path={best_metric.get('packed_path')}, "
+            f"eval_plddt={best_metric.get('eval_plddt')}, "
+            f"eval_iptm={best_metric.get('eval_iptm')}, "
+            f"eval_ptm={best_metric.get('eval_ptm')}"
+        )
     return metrics_to_tile
 
 

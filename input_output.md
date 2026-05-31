@@ -27,6 +27,7 @@ the Biohub ESMFold2 backend.
 | `--symmetry_residues` | Residue symmetry groups, for example `A12,B12|A13,B13`. |
 | `--symmetry_chains` | Chain symmetry groups, for example `A,B,C`. |
 | `--symmetry_segments` | Repeat symmetry for chain A. |
+| `--cyclic` | Cyclic residue-index positional encoding for ESMFold2: `1` for first protein chain, `3` for first three protein chains. This does not add a head-tail covalent bond. |
 
 ## ESMFold2 Arguments
 
