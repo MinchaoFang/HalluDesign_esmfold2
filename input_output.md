@@ -7,7 +7,7 @@ the Biohub ESMFold2 backend.
 
 | Argument | Description |
 |----------|-------------|
-| `--input_file` or `--pdb_list` | Input PDB file, or a text file containing one PDB path per line. |
+| `--input_file`, `--pdb_list`, or `--random_init_chain_spec` | Input PDB file, a text file containing one PDB path per line, or a no-PDB random-init chain length spec. |
 | `--template_path` | HalluDesign template JSON. Protein chains should appear first. |
 | `--output_dir` | Output directory. `processing_results.csv` is written here. |
 
@@ -17,11 +17,15 @@ the Biohub ESMFold2 backend.
 |----------|-------------|
 | `--mpnn` | `protein_mpnn`, `ligand_mpnn`, or `ligandmpnn_plus_proteinmpnn`. Defaults to `protein_mpnn` for protein-only systems and `ligand_mpnn` when ligand/DNA/RNA inputs are provided. |
 | `--num_seqs` | Number of MPNN sequences evaluated after `--design_epoch_begin`. |
+| `--num_designs` | Number of independent no-PDB random-init trajectories. Only used with `--random_init_chain_spec`. |
 | `--num_recycles` | Number of HalluDesign recycle rounds. |
 | `--design_epoch_begin` | Recycle index at which multi-sequence evaluation begins. |
 | `--ref_time_steps` | Number of final ESMFold2 denoising steps used to refine from the current coordinates. Default: `6`. |
+| `--random_init_chain_spec` | No-PDB random-init protein-chain length spec, for example `A:80`, `A:50-80`, or `B:50-80`. Ligand, DNA, and RNA chains are not randomized in this ESMFold2 runner because the downstream MPNN step redesigns protein sequences. |
+| `--seed` | Base random seed. In no-PDB multi-design mode, trajectory seeds are `seed + design_index`. |
 | `--fix_chain_index` | Fixed chain IDs, for example `B` or `A B`. |
 | `--fix_res_index` | Fixed residues, for example `A12 B35`. |
+| `--fix_seq_file` | CSV with `file_path` and optional `fix_res` / `bias` columns. `file_path` can match an input PDB basename such as `monomer.pdb`, or a no-PDB design tag such as `random_init_001`. |
 | `--sm` | SMILES string(s) for ligand chains in the template. |
 | `--dna` / `--rna` | DNA or RNA sequence(s). |
 | `--symmetry_residues` | Residue symmetry groups, for example `A12,B12|A13,B13`. |
@@ -51,11 +55,41 @@ known-working local configuration in
 
 The default full ESMFold2 setting is `--esmfold2_num_sampling_steps 50`, matching
 the Biohub example. `--ref_time_steps` controls how many final denoising steps
-are run from the current HalluDesign coordinates. If a larger value is requested
-than the current effective schedule supports, the runner clamps it to the
-largest coordinate-refinement value supported by that schedule instead of
-switching to pure ESMFold2 prediction. Pure prediction is only used when no
-initial coordinates are provided, or for the first cycle of `--random_init`.
+are run from the current HalluDesign coordinates. If `--ref_time_steps` is
+greater than or equal to `--esmfold2_num_sampling_steps`, the runner ignores the
+current coordinates and runs pure ESMFold2 prediction from sequence plus
+SMILES/CCD. No-PDB random-init mode also uses pure ESMFold2 prediction for the
+first recycle, then feeds the generated PDB into later MPNN/refinement cycles.
+
+## No-PDB Random Init
+
+Use `--random_init_chain_spec` without `--input_file` or `--pdb_list` to start
+from random sequences:
+
+```bash
+python HalluDesign_esmfold2_run.py \
+  --template_path examples/monomer/template_monomer.json \
+  --output_dir examples/benchmark/op_random_monomer_50_80 \
+  --random_init_chain_spec "A:50-80" \
+  --num_designs 20 \
+  --mpnn protein_mpnn \
+  --num_seqs 8 \
+  --num_recycles 20 \
+  --design_epoch_begin 1 \
+  --ref_time_steps 6
+```
+
+For a fixed A-chain scaffold with a random B-chain binder, use
+`examples/benchmark/template_protein_binder_random_b.json` and
+`--random_init_chain_spec "B:50-80" --fix_chain_index A`.
+
+`--fix_seq_file` also works in no-PDB random-init mode. Example CSV:
+
+```csv
+file_path,fix_res,bias
+random_init_001,A1 A2 A3,"{'A10': {'W': 1.0, 'Y': 0.5}}"
+random_init_002,A5 A6,
+```
 
 ## Output
 
@@ -69,12 +103,13 @@ output_dir/
     *_mpnn_eval/
     *_esmfold2_eval/
     *_recycle_1/
-      seed_123/
+      seed_<seed>/
         predictions/
-          *_seed_123_sample_0.cif
-          *_seed_123_sample_0.pdb
+          *_seed_<seed>_sample_0.cif
+          *_seed_<seed>_sample_0.pdb
 ```
 
 The CSV includes MPNN sequence information, ESMFold2 confidence metrics, pLDDT,
 pTM/iPTM, and RMSD-style columns where the corresponding structures can be
-parsed.
+parsed. No-PDB multi-design runs also include `design_index`, `design_tag`, and
+`seed` columns.

@@ -31,6 +31,7 @@ def self_consistency_esmfold2(
     cyclic,
     metrics,
     random_init=False,
+    seed: int = 123,
 ):
     metrics_to_tile = []
     seq_count = 0
@@ -92,7 +93,7 @@ def self_consistency_esmfold2(
         results_eval = designer_model.predict(
             input_json_path=json_path,
             dump_dir=output_dir,
-            seed=123,
+            seed=seed,
         )
 
         max_ranking = _best_summary_index(results_eval)
@@ -102,7 +103,13 @@ def self_consistency_esmfold2(
         chain_pair_iptm = summary["chain_pair_iptm"]
 
         tag = f"{scaffold_basename}_{seq_count}".lower()
-        cif_path = os.path.join(output_dir, tag, "seed_123", "predictions", f"{tag}_seed_123_sample_0.cif")
+        cif_path = os.path.join(
+            output_dir,
+            tag,
+            f"seed_{seed}",
+            "predictions",
+            f"{tag}_seed_{seed}_sample_0.cif",
+        )
         chain_labels = string.ascii_uppercase[:count]
 
         metric["eval_status"] = "success"

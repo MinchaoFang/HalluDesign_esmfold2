@@ -8,6 +8,9 @@ The goal is a simple user experience: one Python 3.12 environment and one
 command. ESMFold2 is loaded in-process, so there is no per-cycle subprocess
 startup or model reload.
 
+A short technical report draft is available in
+[`HalluDesign_ESMFold2.pdf`](HalluDesign_ESMFold2.pdf).
+
 ## Install
 
 ```bash
@@ -55,6 +58,28 @@ python HalluDesign_esmfold2_run.py \
   --ref_time_steps 6
 ```
 
+No-PDB random-init benchmark:
+
+```bash
+python HalluDesign_esmfold2_run.py \
+  --template_path examples/monomer/template_monomer.json \
+  --output_dir examples/benchmark/op_random_monomer_50_80 \
+  --random_init_chain_spec "A:50-80" \
+  --num_designs 20 \
+  --mpnn protein_mpnn \
+  --num_seqs 8 \
+  --num_recycles 20 \
+  --design_epoch_begin 1 \
+  --ref_time_steps 6 \
+  --esmfold2_num_sampling_steps 50 \
+  --esmfold2_num_diffusion_samples 5
+```
+
+For a fixed A-chain scaffold with a random B-chain binder, use
+`examples/benchmark/template_protein_binder_random_b.json` with
+`--random_init_chain_spec "B:50-80" --fix_chain_index A`. Additional one-line
+benchmark commands are collected in `examples/examples_commands.sh`.
+
 By default the runner uses the local checkpoints that have already been tested
 on this machine:
 
@@ -67,9 +92,48 @@ For a different machine, pass `--esmfold2_model_path` and `--esmc_model_path`.
 The model loader uses `local_files_only=True` by default; add
 `--esmfold2_allow_download` only if the environment can access Hugging Face.
 
+## Recommended Use and Limitations
+
+HalluDesign with AF3/Protenix often behaves like a positive feedback loop: MPNN
+proposes sequences, the structure model refines the complex, and the confidence
+score can gradually improve across cycles. The ESMFold2 backend is different.
+ESMFold2/ESMC has learned strong sequence-level protein representations, so even
+small amino-acid changes introduced by MPNN can change the sequence prior enough
+that a single proposed sequence may not improve together with the current
+structure. In practice, ESMFold2-based HalluDesign is less reliable as a
+single-sequence optimization loop.
+
+For this reason, the ESMFold2 branch should usually run multiple MPNN sequences
+per cycle and evaluate them with ESMFold2 self-consistency before selecting the
+next structure. The optimization trajectory can be unstable: confidence scores
+may fluctuate across cycles instead of improving steadily, and more cycles may
+be needed to reach high-confidence designs. This is especially important for
+protein-small molecule complexes, where ligand/interface metrics such as
+protein-ligand iPTM may not increase monotonically like AF3 iPTM. Protein-only
+optimization is generally more reliable, because ESMFold2 is much stronger at
+protein foldability than at small-molecule placement and atom-level interface
+optimization.
+
+The main practical value of this branch is speed. ESMFold2 is loaded in-process
+and runs quickly, so it is useful for random-init/from-scratch generation,
+protein-only optimization, peptide or cyclic-peptide design, fast foldability
+screening, and prefiltering candidates before heavier AF3/Protenix validation.
+For ligand-binder projects, treat this backend as a fast exploratory or
+prefiltering tool rather than a direct replacement for AF3/Protenix interface
+optimization.
+
 ## Notes
 
 - Use the HalluDesign template JSON files under `examples/*/template_*.json`.
+- To start without an input PDB, omit `--input_file` and `--pdb_list`, then set
+  `--random_init_chain_spec`, for example `A:80` or `A:50-80`. With
+  `--num_designs 20`, the runner starts 20 independent trajectories named
+  `random_init_001`, `random_init_002`, and so on. The seed for each trajectory
+  is `--seed + design_index`.
+- In no-PDB random-init mode, recycle 1 is a pure ESMFold2 prediction from the
+  random template sequence. Later recycles use the generated PDB as the current
+  structure and run the usual MPNN, ESMFold2 self-consistency, and coordinate
+  refinement loop.
 - `--esmfold2_num_sampling_steps 0` means use the checkpoint config. For the
   tested local ESMFold2 snapshot this is 14 raw diffusion steps. The runner
   defaults to `--esmfold2_num_sampling_steps 50`, matching the Biohub ESMFold2

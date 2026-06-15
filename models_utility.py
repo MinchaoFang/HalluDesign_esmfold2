@@ -56,6 +56,7 @@ def esmfold2_op_eval(
     chain_number_list_cdr,
     cyclic,
     random_init,
+    seed: int = 123,
     run_esmfold2: bool = True,
 ) -> Dict:
     """Run one HalluDesign optimization cycle with ESMFold2."""
@@ -163,6 +164,7 @@ def esmfold2_op_eval(
                 cyclic=cyclic,
                 metrics=metrics,
                 random_init=random_init,
+                seed=seed,
             )
             if metrics:
                 print(
@@ -249,7 +251,7 @@ def esmfold2_op_eval(
             results_op = designer_model.predict(
                 input_json_path=json_path,
                 dump_dir=target_dir,
-                seed=123,
+                seed=seed,
             )
         elif (
             getattr(designer_model, "num_sampling_steps", None) is not None
@@ -263,7 +265,7 @@ def esmfold2_op_eval(
             results_op = designer_model.predict(
                 input_json_path=json_path,
                 dump_dir=target_dir,
-                seed=123,
+                seed=seed,
             )
         else:
             print(
@@ -274,7 +276,7 @@ def esmfold2_op_eval(
             results_op = designer_model.predict(
                 input_json_path=json_path,
                 dump_dir=target_dir,
-                seed=123,
+                seed=seed,
                 input_atom_array_path=copied_file,
                 diffusion_steps=ref_time_steps,
             )
@@ -283,9 +285,9 @@ def esmfold2_op_eval(
             cif_path = os.path.join(
                 target_dir,
                 tag,
-                "seed_123",
+                f"seed_{seed}",
                 "predictions",
-                f"{tag}_seed_123_sample_0.cif",
+                f"{tag}_seed_{seed}_sample_0.cif",
             )
             metrics = process_confidence_metrics_esmfold2(
                 results_op,
